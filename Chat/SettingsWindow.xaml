@@ -1,0 +1,79 @@
+<Window x:Class="DeskPet.Chat.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Settings — DeskPet"
+        Width="380" Height="440"
+        WindowStyle="ToolWindow"
+        ResizeMode="NoResize"
+        Topmost="True"
+        Background="#FFF5F8">
+  <ScrollViewer VerticalScrollBarVisibility="Auto">
+    <StackPanel Margin="16">
+      <TextBlock Text="Pudding 设置" FontSize="16" FontWeight="Bold" 
+                 Foreground="#D08090" Margin="0,0,0,12"/>
+
+      <!-- AI: model selector from opencode data -->
+      <Border Background="White" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+        <StackPanel>
+          <TextBlock Text="AI 对话" FontWeight="Bold" FontSize="13" Foreground="#C06080"/>
+          <TextBlock Name="SourceLabel" Text="从 OpenCode 自动读取" FontSize="11" Foreground="#999" Margin="0,4,0,0"/>
+          <TextBlock Text="选择模型" FontSize="11" Foreground="#999" Margin="0,8,0,2"/>
+          <ComboBox Name="ModelList" FontSize="12" Padding="4" IsEditable="True"
+                    SelectionChanged="OnModelSelected"/>
+          <TextBlock Name="ModelDetail" FontSize="10" Foreground="#999" Margin="0,4,0,0"
+                     TextWrapping="Wrap"/>
+        </StackPanel>
+      </Border>
+
+      <!-- Personality -->
+      <Border Background="White" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+        <StackPanel>
+          <TextBlock Text="人格" FontWeight="Bold" FontSize="13" Foreground="#C06080"/>
+          <TextBlock Text="System Prompt" FontSize="11" Foreground="#999" Margin="0,6,0,2"/>
+          <TextBox Name="AiPrompt" FontSize="12" Padding="4" Height="60" 
+                   TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"/>
+        </StackPanel>
+      </Border>
+
+      <!-- Behavior -->
+      <Border Background="White" CornerRadius="8" Padding="12" Margin="0,0,0,8">
+        <StackPanel>
+          <TextBlock Text="行为" FontWeight="Bold" FontSize="13" Foreground="#C06080"/>
+          <Grid Margin="0,6,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="60"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="空闲间隔 (秒)" VerticalAlignment="Center" FontSize="12"/>
+            <TextBox Name="IdleInterval" Grid.Column="1" TextAlignment="Center" FontSize="12" Padding="4"/>
+          </Grid>
+          <Grid Margin="0,6,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="60"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="移动速度" VerticalAlignment="Center" FontSize="12"/>
+            <TextBox Name="WalkSpeed" Grid.Column="1" TextAlignment="Center" FontSize="12" Padding="4"/>
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!-- Save -->
+      <Button Content="保存设置" Padding="12,8" Margin="0,8,0,0" FontSize="14" FontWeight="Bold"
+              Foreground="White" Click="OnSave" Cursor="Hand">
+        <Button.Template>
+          <ControlTemplate TargetType="Button">
+            <Border Name="Bg" Background="#FF9ABA" CornerRadius="8" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bg" Property="Background" Value="#E880A0"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Button.Template>
+      </Button>
+    </StackPanel>
+  </ScrollViewer>
+</Window>
