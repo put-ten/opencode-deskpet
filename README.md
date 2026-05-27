@@ -2,8 +2,6 @@
 
 A pixel cat that lives on your Windows taskbar, powered by your OpenCode account.
 
-https://github.com/user-attachments/assets/placeholder
-
 ## Features
 
 - Walks left and right on the taskbar, bounces off screen edges
