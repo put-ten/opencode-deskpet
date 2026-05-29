@@ -11,25 +11,37 @@ public class ChatService
     private readonly HttpClient _http = new();
     private readonly Settings.AiConfig _config;
     private readonly List<object> _messages = new();
+    private readonly ChatHistory _history;
 
     public ChatService(Settings.AiConfig config)
     {
         _config = config;
+        _history = ChatHistory.Load();
         _messages.Add(new { role = "system", content = "你是一只住在主人电脑桌面上的像素小猫。说话带喵，语气傲娇又粘人，句子简短。" });
+        foreach (var msg in _history.Messages)
+        {
+            _messages.Add(new { role = msg.Role, content = msg.Content });
+        }
     }
+
+    public ChatHistory History => _history;
 
     public async IAsyncEnumerable<string> SendAsync(string text)
     {
         _messages.Add(new { role = "user", content = text });
+        _history.AddUser(text);
 
         if (string.IsNullOrWhiteSpace(_config.Endpoint) || string.IsNullOrWhiteSpace(_config.ApiKey))
         {
-            yield return text switch
+            var fallback = text switch
             {
                 string s when s.Contains("你好") || s.Contains("嗨") || s.Contains("hi") => "嗨~ 我在呢！",
                 string s when s.Contains("可爱") => "嘿嘿，谢谢！你也很棒~",
                 _ => "喵？"
             };
+            _history.AddAssistant(fallback);
+            _history.Save();
+            yield return fallback;
             yield break;
         }
 
@@ -73,5 +85,7 @@ public class ChatService
         }
 
         _messages.Add(new { role = "assistant", content = fullContent });
+        _history.AddAssistant(fullContent);
+        _history.Save();
     }
 }
