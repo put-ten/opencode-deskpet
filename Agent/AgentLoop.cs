@@ -14,6 +14,10 @@ public class AgentLoop
     private readonly Dictionary<string, ITool> _tools;
     private readonly List<ApiMessage> _messages = new();
     private const int MaxRounds = 5;
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
 
     public AgentLoop(Settings.AiConfig config, IEnumerable<ITool> tools)
     {
@@ -43,28 +47,27 @@ public class AgentLoop
 
         for (var round = 0; round < MaxRounds; round++)
         {
-            var (chunks, toolCalls, finishReason) = await StreamOneRoundAsync(ct);
+            var (textChunks, toolCalls, finishReason, reasoning) = await CallApiAsync(ct);
 
-            foreach (var chunk in chunks)
+            foreach (var chunk in textChunks)
                 yield return chunk;
 
             if (finishReason != "tool_calls" || toolCalls.Count == 0)
                 yield break;
 
-            // Add assistant message with tool_calls
             _messages.Add(new ApiMessage
             {
                 role = "assistant",
                 content = null,
-                tool_calls = toolCalls.Select(tc => new ToolCall
+                reasoning_content = reasoning,
+                tool_calls = toolCalls.Select(tc => new ToolCallObj
                 {
                     id = tc.Id,
                     type = "function",
-                    function = new FunctionCall { name = tc.Name, arguments = tc.Arguments }
+                    function = new FunctionCallObj { name = tc.Name, arguments = tc.Arguments }
                 }).ToList()
             });
 
-            // Execute each tool and add results
             foreach (var tc in toolCalls)
             {
                 yield return new AgentChunk(AgentChunkKind.ToolCallStart, ToolName: tc.Name, ToolCallId: tc.Id);
@@ -83,15 +86,9 @@ public class AgentLoop
         }
     }
 
-    private async Task<(List<AgentChunk> chunks, List<PendingToolCall> toolCalls, string finishReason)>
-        StreamOneRoundAsync(CancellationToken ct)
+    private async Task<(List<AgentChunk>, List<PendingToolCall>, string, string)> CallApiAsync(CancellationToken ct)
     {
-        var chunks = new List<AgentChunk>();
-        var pendingTools = new Dictionary<int, PendingToolCall>();
-        var finishReason = "stop";
-        var fullText = "";
-
-        var toolsDef = _tools.Values.Select(t => new
+        var toolDefs = _tools.Values.Select(t => new
         {
             type = "function",
             function = new
@@ -102,15 +99,9 @@ public class AgentLoop
             }
         }).ToList();
 
-        var body = new
-        {
-            model = _config.Model,
-            messages = _messages,
-            tools = toolsDef,
-            stream = true
-        };
+        var body = new { model = _config.Model, messages = _messages, tools = toolDefs, stream = true };
+        var json = JsonSerializer.Serialize(body, JsonOpts);
 
-        var json = JsonSerializer.Serialize(body);
         var request = new HttpRequestMessage(HttpMethod.Post, _config.Endpoint.TrimEnd('/'))
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
@@ -118,39 +109,52 @@ public class AgentLoop
         request.Headers.Add("Authorization", $"Bearer {_config.ApiKey}");
 
         var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var errBody = await response.Content.ReadAsStringAsync(ct);
+            File.WriteAllText(
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "deskpet_api_error.log"),
+                $"Status: {response.StatusCode}\nResponse: {errBody}\n\nRequest: {json}"
+            );
+            throw new HttpRequestException($"API {response.StatusCode}: {errBody}");
+        }
 
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
+        var textChunks = new List<AgentChunk>();
+        var pendingTools = new Dictionary<int, PendingToolCall>();
+        var fullText = "";
+        var reasoning = "";
+        var finish = "stop";
+
         while (!reader.EndOfStream)
         {
             var line = await reader.ReadLineAsync(ct);
-            if (string.IsNullOrEmpty(line)) continue;
-            if (!line.StartsWith("data: ")) continue;
+            if (string.IsNullOrEmpty(line) || !line.StartsWith("data: ")) continue;
             var data = line[6..];
             if (data == "[DONE]") break;
 
             using var doc = JsonDocument.Parse(data);
             var choice = doc.RootElement.GetProperty("choices")[0];
-
             if (choice.TryGetProperty("finish_reason", out var fr) && fr.ValueKind != JsonValueKind.Null)
-                finishReason = fr.GetString() ?? "stop";
-
+                finish = fr.GetString() ?? "stop";
             if (!choice.TryGetProperty("delta", out var delta)) continue;
 
-            // Text content
-            if (delta.TryGetProperty("content", out var content) && content.ValueKind != JsonValueKind.Null)
+            if (delta.TryGetProperty("content", out var c) && c.ValueKind != JsonValueKind.Null)
             {
-                var text = content.GetString() ?? "";
-                fullText += text;
-                chunks.Add(new AgentChunk(AgentChunkKind.StreamingText, Text: fullText));
+                fullText += c.GetString() ?? "";
+                textChunks.Add(new AgentChunk(AgentChunkKind.StreamingText, Text: fullText));
             }
 
-            // Tool calls
-            if (delta.TryGetProperty("tool_calls", out var toolCalls) && toolCalls.ValueKind == JsonValueKind.Array)
+            if (delta.TryGetProperty("reasoning_content", out var rc) && rc.ValueKind != JsonValueKind.Null)
             {
-                foreach (var tc in toolCalls.EnumerateArray())
+                reasoning += rc.GetString() ?? "";
+            }
+
+            if (delta.TryGetProperty("tool_calls", out var tcs) && tcs.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var tc in tcs.EnumerateArray())
                 {
                     var idx = tc.GetProperty("index").GetInt32();
                     if (!pendingTools.ContainsKey(idx))
@@ -158,35 +162,32 @@ public class AgentLoop
                         pendingTools[idx] = new PendingToolCall();
                         if (tc.TryGetProperty("id", out var id))
                             pendingTools[idx].Id = id.GetString() ?? "";
-                        if (tc.TryGetProperty("function", out var fn) && fn.TryGetProperty("name", out var name))
-                            pendingTools[idx].Name = name.GetString() ?? "";
+                        if (tc.TryGetProperty("function", out var fn) && fn.TryGetProperty("name", out var n))
+                            pendingTools[idx].Name = n.GetString() ?? "";
                     }
-                    if (tc.TryGetProperty("function", out var fn2) && fn2.TryGetProperty("arguments", out var args))
-                    {
-                        pendingTools[idx].Arguments += args.GetString() ?? "";
-                    }
+                    if (tc.TryGetProperty("function", out var fn2) && fn2.TryGetProperty("arguments", out var a))
+                        pendingTools[idx].Arguments += a.GetString() ?? "";
                 }
             }
         }
 
-        return (chunks, pendingTools.Values.ToList(), finishReason);
+        return (textChunks, pendingTools.Values.ToList(), finish, reasoning);
     }
 
     private async Task<string> ExecuteToolAsync(PendingToolCall tc, CancellationToken ct)
     {
         if (!_tools.TryGetValue(tc.Name, out var tool))
             return $"Error: unknown tool '{tc.Name}'";
-
         try
         {
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
             var args = JsonDocument.Parse(tc.Arguments).RootElement;
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(15));
-            return await tool.ExecuteAsync(args, timeoutCts.Token);
+            return await tool.ExecuteAsync(args, linked.Token);
         }
         catch (OperationCanceledException)
         {
-            return "Error: tool execution timed out (15s)";
+            return "Error: timeout (15s)";
         }
         catch (Exception ex)
         {
@@ -194,23 +195,24 @@ public class AgentLoop
         }
     }
 
-    // Internal message types for API protocol
+    // ---- API message types ----
     private class ApiMessage
     {
         public string role { get; set; } = "";
         public string? content { get; set; }
-        public List<ToolCall>? tool_calls { get; set; }
+        public List<ToolCallObj>? tool_calls { get; set; }
         public string? tool_call_id { get; set; }
+        public string? reasoning_content { get; set; }
     }
 
-    private class ToolCall
+    private class ToolCallObj
     {
         public string id { get; set; } = "";
         public string type { get; set; } = "function";
-        public FunctionCall function { get; set; } = new();
+        public FunctionCallObj function { get; set; } = new();
     }
 
-    private class FunctionCall
+    private class FunctionCallObj
     {
         public string name { get; set; } = "";
         public string arguments { get; set; } = "";
