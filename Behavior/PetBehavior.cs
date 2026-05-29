@@ -12,13 +12,18 @@ public class PetBehavior
     public double X { get; set; }
     public double Y { get; set; }
     public bool Docked { get; set; }
+    public int IdleInterval
+    {
+        get => _idleIntervalMs / 1000;
+        set => _idleIntervalMs = value * 1000;
+    }
 
     private readonly Random _random = new();
     private int _idleTimer;
     private int _inactivityTimer;
     private int _bounceDir;
-    private const int IdleIntervalMs = 3000;
-    private const int SleepTimeoutMs = 20000;
+    private int _idleIntervalMs = 3000;
+    private int _sleepTimeoutMs = 20000;
 
     public void SetAnimator(SpriteAnimator animator) => Animator = animator;
 
@@ -55,14 +60,14 @@ public class PetBehavior
         _idleTimer += deltaMs;
         _inactivityTimer += deltaMs;
 
-        if (_inactivityTimer >= SleepTimeoutMs)
+        if (_inactivityTimer >= _sleepTimeoutMs)
         {
             StateMachine.TransitionTo(PetState.Sleep);
             Animator?.Play(0);
             return;
         }
 
-        if (_idleTimer >= IdleIntervalMs)
+        if (_idleTimer >= _idleIntervalMs)
         {
             _idleTimer = 0;
             if (_random.Next(3) == 0)
@@ -107,7 +112,7 @@ public class PetBehavior
         }
 
         _idleTimer += deltaMs;
-        if (_idleTimer > IdleIntervalMs)
+        if (_idleTimer > _idleIntervalMs)
         {
             _idleTimer = 0;
             SpeedX = 0;

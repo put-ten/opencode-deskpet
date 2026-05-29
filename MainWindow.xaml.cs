@@ -160,6 +160,7 @@ public partial class MainWindow : Window
         var settings = Settings.Load();
         Opacity = settings.Window.Opacity;
         Topmost = settings.Window.AlwaysOnTop;
+        _pet.IdleInterval = settings.Behavior.IdleInterval;
     }
 
     private void OpenSettings()

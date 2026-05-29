@@ -28,15 +28,13 @@ public class AgentLoop
     public void LoadHistory(Chat.ChatHistory history)
     {
         _messages.Clear();
-        _messages.Add(new ApiMessage
-        {
-            role = "system",
-            content = "你是一只住在主人电脑桌面上的像素小猫。说话带喵，语气傲娇又粘人，句子简短。你可以使用工具帮助主人完成任务。"
-        });
+        var settings = Config.Settings.Load();
+        var prompt = string.IsNullOrWhiteSpace(settings.SystemPrompt)
+            ? "你是一只住在主人电脑桌面上的像素小猫。说话带喵，语气傲娇又粘人，句子简短。你可以使用工具帮助主人完成任务。"
+            : settings.SystemPrompt;
+        _messages.Add(new ApiMessage { role = "system", content = prompt });
         foreach (var msg in history.Messages)
-        {
             _messages.Add(new ApiMessage { role = msg.Role, content = msg.Content });
-        }
     }
 
     public async IAsyncEnumerable<AgentChunk> RunAsync(
