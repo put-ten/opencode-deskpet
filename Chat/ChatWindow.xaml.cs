@@ -18,7 +18,13 @@ public partial class ChatWindow : Window
         InitializeComponent();
         _config = aiConfig;
         _history = ChatHistory.Load();
-        var tools = new ITool[] { new ReadFileTool() };
+        var tools = new ITool[]
+        {
+            new ReadFileTool(),
+            new ListDirectoryTool(),
+            new SearchFilesTool(),
+            new GetDateTimeTool(),
+        };
         _agent = new AgentLoop(aiConfig, tools);
         _agent.LoadHistory(_history);
         LoadHistoryUI();

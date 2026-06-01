@@ -45,46 +45,43 @@ public class AgentLoop
 
         for (var round = 0; round < MaxRounds; round++)
         {
-            var (textChunks, toolCalls, finishReason, reasoning) = await CallApiAsync(ct);
+            var (fullText, toolCalls, finishReason, reasoning) = await CallApiAsync(ct);
 
-            foreach (var chunk in textChunks)
-                yield return chunk;
+            if (!string.IsNullOrEmpty(fullText))
+                yield return new AgentChunk(AgentChunkKind.StreamingText, Text: fullText);
 
-            if (finishReason != "tool_calls" || toolCalls.Count == 0)
-                yield break;
-
-            _messages.Add(new ApiMessage
+            if (finishReason == "tool_calls" && toolCalls.Count > 0)
             {
-                role = "assistant",
-                content = null,
-                reasoning_content = reasoning,
-                tool_calls = toolCalls.Select(tc => new ToolCallObj
-                {
-                    id = tc.Id,
-                    type = "function",
-                    function = new FunctionCallObj { name = tc.Name, arguments = tc.Arguments }
-                }).ToList()
-            });
-
-            foreach (var tc in toolCalls)
-            {
-                yield return new AgentChunk(AgentChunkKind.ToolCallStart, ToolName: tc.Name, ToolCallId: tc.Id);
-
-                var result = await ExecuteToolAsync(tc, ct);
-
                 _messages.Add(new ApiMessage
                 {
-                    role = "tool",
-                    content = result,
-                    tool_call_id = tc.Id
+                    role = "assistant",
+                    content = fullText,
+                    reasoning_content = reasoning,
+                    tool_calls = toolCalls.Select(tc => new ToolCallObj
+                    {
+                        id = tc.Id,
+                        type = "function",
+                        function = new FunctionCallObj { name = tc.Name, arguments = tc.Arguments }
+                    }).ToList()
                 });
 
-                yield return new AgentChunk(AgentChunkKind.ToolResult, ToolName: tc.Name, ToolResult: result);
+                foreach (var tc in toolCalls)
+                {
+                    yield return new AgentChunk(AgentChunkKind.ToolCallStart, ToolName: tc.Name, ToolCallId: tc.Id);
+                    var result = await ExecuteToolAsync(tc, ct);
+                    _messages.Add(new ApiMessage { role = "tool", content = result, tool_call_id = tc.Id });
+                    yield return new AgentChunk(AgentChunkKind.ToolResult, ToolName: tc.Name, ToolResult: result);
+                }
+            }
+            else
+            {
+                _messages.Add(new ApiMessage { role = "assistant", content = fullText, reasoning_content = reasoning });
+                yield break;
             }
         }
     }
 
-    private async Task<(List<AgentChunk>, List<PendingToolCall>, string, string)> CallApiAsync(CancellationToken ct)
+    private async Task<(string, List<PendingToolCall>, string, string)> CallApiAsync(CancellationToken ct)
     {
         var toolDefs = _tools.Values.Select(t => new
         {
@@ -120,7 +117,6 @@ public class AgentLoop
         using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        var textChunks = new List<AgentChunk>();
         var pendingTools = new Dictionary<int, PendingToolCall>();
         var fullText = "";
         var reasoning = "";
@@ -142,7 +138,6 @@ public class AgentLoop
             if (delta.TryGetProperty("content", out var c) && c.ValueKind != JsonValueKind.Null)
             {
                 fullText += c.GetString() ?? "";
-                textChunks.Add(new AgentChunk(AgentChunkKind.StreamingText, Text: fullText));
             }
 
             if (delta.TryGetProperty("reasoning_content", out var rc) && rc.ValueKind != JsonValueKind.Null)
@@ -169,7 +164,7 @@ public class AgentLoop
             }
         }
 
-        return (textChunks, pendingTools.Values.ToList(), finish, reasoning);
+        return (fullText, pendingTools.Values.ToList(), finish, reasoning);
     }
 
     private async Task<string> ExecuteToolAsync(PendingToolCall tc, CancellationToken ct)

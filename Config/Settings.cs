@@ -84,15 +84,17 @@ public class Settings
                 }
             }
         }
-        catch { }
-
-        if (models.Count == 0)
-            models.Add(new ModelEntry { ModelId = "deepseek-v4-pro", ProviderName = "opencode-go", HasKey = true });
+        catch (Exception ex)
+        {
+            File.WriteAllText(
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "deskpet_config_error.log"),
+                $"LoadModels failed: {ex.Message}\n{ex.StackTrace}");
+        }
 
         return models;
     }
 
-    public static AiConfig ResolveAi(string? preferredModel = null)
+    public static AiConfig? ResolveAi(string? preferredModel = null)
     {
         var models = LoadModels();
         var pick = preferredModel ?? "";
@@ -101,15 +103,16 @@ public class Settings
                     ?? models.FirstOrDefault(m => m.HasKey)
                     ?? models.FirstOrDefault();
 
-        if (selected == null)
-            return new AiConfig { Model = "deepseek-v4-pro" };
+        if (selected == null || !selected.HasKey) return null;
 
         var prov = GetProvider(selected.ProviderName);
+        if (prov == null) return null;
+
         return new AiConfig
         {
             Model = selected.ModelId,
-            Endpoint = prov?.Endpoint ?? "https://opencode.ai/zen/go/v1/chat/completions",
-            ApiKey = prov?.ApiKey ?? ""
+            Endpoint = prov.Endpoint,
+            ApiKey = prov.ApiKey
         };
     }
 

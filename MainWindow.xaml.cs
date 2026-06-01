@@ -30,6 +30,13 @@ public partial class MainWindow : Window
     private SettingsWindow? _settingsWindow;
     private bool _isDocked;
     private bool _isDropping;
+    private bool _facingRight;
+    private double _cursorX;
+    private double _cursorY;
+    private readonly Dictionary<SpriteSheet, System.Windows.Media.Imaging.WriteableBitmap[]> _frameCache = new();
+    private ParticleSystem? _particles;
+    private readonly Queue<DateTime> _recentClicks = new();
+    private bool _grumpyPlaying;
 
     public MainWindow()
     {
@@ -43,6 +50,7 @@ public partial class MainWindow : Window
         _click = new ClickHandler(this, _pet, _drag);
         _tray = new TrayIcon(this);
         _click.OnDoubleClickAction += OpenChat;
+        _click.OnRapidClick += OnRapidClick;
         _pet.StateMachine.OnStateChanged += OnPetStateChanged;
         SetupWindow();
         _pet.SetPosition(Left, Top);
@@ -56,6 +64,13 @@ public partial class MainWindow : Window
         if (_chatWindow == null || !_chatWindow.IsVisible)
         {
             var ai = Config.Settings.ResolveAi(Config.Settings.Load().SelectedModel);
+            if (ai == null)
+            {
+                System.Windows.MessageBox.Show(
+                    "找不到可用的 OpenCode 模型。\n请确认 ~/.local/share/opencode/auth.json 和 ~/.config/opencode/opencode.jsonc 存在并包含有效 key。\n或打开「设置」手动指定模型。",
+                    "Pudding", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
             _chatWindow = new ChatWindow(ai);
             _chatWindow.Closed += (_, _) => _chatWindow = null;
             _chatWindow.Show();
@@ -140,18 +155,18 @@ public partial class MainWindow : Window
         _sheets[PetState.Sleep] = LoadSprite(dir, "cat_sleep.png");
         _sheets[PetState.Bounce] = LoadSprite(dir, "cat_bounce.png");
         _sheets[PetState.Interact] = _sheets[PetState.Stretch];
-        _sheets[PetState.Jump] = LoadSprite(dir, "cat_jump.png");
         _sheets[PetState.Drag] = _sheets[PetState.Idle];
-        _sheets[PetState.Chat] = _sheets[PetState.Idle];
         _sheet = _sheets[PetState.Idle];
         _animator.Sheet = _sheet;
         _animator.Play(0);
+        _particles = new ParticleSystem(ParticleCanvas);
     }
 
-    private static SpriteSheet LoadSprite(string dir, string name)
+    private SpriteSheet LoadSprite(string dir, string name)
     {
         var sheet = new SpriteSheet("cat", 48, 48);
         sheet.Load(System.IO.Path.Combine(dir, name));
+        _frameCache[sheet] = _renderer.PreRender(sheet);
         return sheet;
     }
 
@@ -161,6 +176,7 @@ public partial class MainWindow : Window
         Opacity = settings.Window.Opacity;
         Topmost = settings.Window.AlwaysOnTop;
         _pet.IdleInterval = settings.Behavior.IdleInterval;
+        OpacitySlider.Value = settings.Window.Opacity * 100;
     }
 
     private void OpenSettings()
@@ -196,8 +212,11 @@ public partial class MainWindow : Window
             _lastTick = now;
             if (delta > 100) delta = 16;
 
-            _animator.Update(delta);
-            _pet.Update(delta, _screenWidth, _screenHeight, (int)Width);
+        _animator.Update(delta);
+        UpdateChaseTarget();
+        _pet.CursorX = _cursorX;
+        _pet.CursorY = _cursorY;
+        _pet.Update(delta, _screenWidth, _screenHeight, (int)Width);
 
             UpdatePosition();
             RenderFrame();
@@ -216,31 +235,36 @@ public partial class MainWindow : Window
         Left += _pet.SpeedX;
         if (!_drag.IsDragging && !_isDropping)
         {
-            var jumpOff = _pet.StateMachine.CurrentState == PetState.Jump
-                ? JumpOffset(_animator.CurrentFrame)
-                : 0;
-            Top = _taskbarY - jumpOff;
+            Top = _taskbarY;
             _pet.Y = Top;
         }
         _pet.X = Left;
     }
 
-    private static double JumpOffset(int frame)
+    private void UpdateChaseTarget()
     {
-        // Frames 0-4: going up, max height at frame 4
-        // Frames 5-9: coming down, back to 0 at frame 9
-        var t = frame / 9.0;
-        return Math.Sin(t * Math.PI) * 60;
+        var cursor = System.Windows.Forms.Cursor.Position;
+        var source = PresentationSource.FromVisual(this);
+        var scaleX = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+        var scaleY = source?.CompositionTarget?.TransformToDevice.M22 ?? 1.0;
+        _cursorX = cursor.X / scaleX;
+        _cursorY = cursor.Y / scaleY;
     }
 
     private void RenderFrame()
     {
-        var frame = _renderer.RenderFrame(_sheet, _animator.CurrentFrame);
-        PetImage.Source = frame;
-        var flip = _pet.SpeedX > 0;
-        if (_pet.StateMachine.CurrentState == PetState.Bounce)
-            flip = _pet.X > _screenWidth * 0.5;
-        PetImage.RenderTransform = flip
+        var cursor = System.Windows.Forms.Cursor.Position;
+        var source = PresentationSource.FromVisual(this);
+        var scaleX = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+        var cursorX = cursor.X / scaleX;
+        var catCenterX = Left + Width / 2.0;
+        if (_pet.SpeedX > 0) _facingRight = true;
+        else if (_pet.SpeedX < 0) _facingRight = false;
+        else _facingRight = cursorX > catCenterX;
+        PetImage.Source = _frameCache.TryGetValue(_sheet, out var frames) && _animator.CurrentFrame < frames.Length
+            ? frames[_animator.CurrentFrame]
+            : _renderer.RenderFrame(_sheet, _animator.CurrentFrame);
+        PetImage.RenderTransform = _facingRight
             ? new System.Windows.Media.ScaleTransform { ScaleX = -1, CenterX = 48 }
             : null;
     }
@@ -267,5 +291,40 @@ public partial class MainWindow : Window
     {
         _tray.Dispose();
         Close();
+    }
+
+    private void OnPetMouseEnter(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_particles == null) return;
+        if (_pet.StateMachine.CurrentState == PetState.Sleep) return;
+        _particles.EmitHearts(Width / 2.0, 64, 3);
+    }
+
+    private void OnPetMouseLeave(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_particles == null) return;
+        if (_pet.StateMachine.CurrentState == PetState.Sleep) return;
+        _particles.EmitQuestion(Width / 2.0, 64);
+    }
+
+    private void OnRapidClick()
+    {
+        if (_grumpyPlaying) return;
+        if (_pet.StateMachine.CurrentState == PetState.Sleep) return;
+        if (_particles != null) _particles.EmitHearts(Width / 2.0, 64, 5);
+        _grumpyPlaying = true;
+        ShowScaredFace();
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(900) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            _grumpyPlaying = false;
+            _sheet = _sheets[PetState.Idle];
+            _animator.Sheet = _sheet;
+            _pet.StateMachine.TransitionTo(PetState.Idle);
+            _animator.Loop = true;
+            _animator.Play(0);
+        };
+        timer.Start();
     }
 }

@@ -15,13 +15,30 @@ public class PixelRenderer
 
     public WriteableBitmap RenderFrame(SpriteSheet sheet, int frameIndex)
     {
-        var bmp = sheet.Bitmap ?? throw new InvalidOperationException("SpriteSheet not loaded");
         var srcRect = sheet.GetSourceRect(frameIndex);
         var srcW = srcRect.Width;
         var srcH = srcRect.Height;
         var dstW = srcW * Scale;
         var dstH = srcH * Scale;
+        return RenderToBuffer(sheet, srcRect, srcW, srcH, dstW, dstH);
+    }
 
+    public WriteableBitmap[] PreRender(SpriteSheet sheet)
+    {
+        var frames = new WriteableBitmap[sheet.FrameCount];
+        for (var i = 0; i < sheet.FrameCount; i++)
+        {
+            var srcRect = sheet.GetSourceRect(i);
+            frames[i] = RenderToBuffer(sheet, srcRect, srcRect.Width, srcRect.Height,
+                srcRect.Width * Scale, srcRect.Height * Scale);
+        }
+        return frames;
+    }
+
+    private WriteableBitmap RenderToBuffer(SpriteSheet sheet, Int32Rect srcRect,
+        int srcW, int srcH, int dstW, int dstH)
+    {
+        var bmp = sheet.Bitmap ?? throw new InvalidOperationException("SpriteSheet not loaded");
         var bitmap = new WriteableBitmap(dstW, dstH, 96, 96, PixelFormats.Bgra32, null);
 
         var srcStride = srcW * 4;

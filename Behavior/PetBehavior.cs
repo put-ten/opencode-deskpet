@@ -18,6 +18,13 @@ public class PetBehavior
         set => _idleIntervalMs = value * 1000;
     }
 
+    public double? ChaseTargetX { get; set; }
+    public bool IsChasing => ChaseTargetX.HasValue;
+    private int _chaseDetectTimer;
+    private long _chaseCooldownUntilMs;
+    public double CursorX { get; set; }
+    public double CursorY { get; set; }
+
     private readonly Random _random = new();
     private int _idleTimer;
     private int _inactivityTimer;
@@ -27,8 +34,26 @@ public class PetBehavior
 
     public void SetAnimator(SpriteAnimator animator) => Animator = animator;
 
+    private void GoTo(double targetX)
+    {
+        var catEdge = targetX > X + 48 ? X + 96 : X;
+        var dist = targetX - catEdge;
+        if (Math.Abs(dist) < 12)
+        {
+            ChaseTargetX = null;
+            return;
+        }
+        ChaseTargetX = targetX;
+        SpeedX = Math.Sign(dist) * (2.0 + _random.NextDouble() * 2.0);
+        SpeedY = 0;
+        StateMachine.TransitionTo(PetState.Walk);
+        Animator?.Play(0);
+    }
+
+    private long _nowMs;
     public void Update(int deltaMs, double screenWidth, double screenHeight, int petSize)
     {
+        _nowMs += deltaMs;
         switch (StateMachine.CurrentState)
         {
             case PetState.Idle:
@@ -36,9 +61,6 @@ public class PetBehavior
                 break;
             case PetState.Walk:
                 UpdateWalk(deltaMs, screenWidth, screenHeight, petSize);
-                break;
-            case PetState.Jump:
-                UpdateTimedAction(deltaMs);
                 break;
             case PetState.Stretch:
             case PetState.Interact:
@@ -48,9 +70,7 @@ public class PetBehavior
                 UpdateTimedAction(deltaMs);
                 break;
             case PetState.Drag:
-                break;
             case PetState.Sleep:
-                UpdateSleep(deltaMs);
                 break;
         }
     }
@@ -59,6 +79,32 @@ public class PetBehavior
     {
         _idleTimer += deltaMs;
         _inactivityTimer += deltaMs;
+
+        // Cursor chase detection using CursorX/CursorY (set every frame by MainWindow)
+        if (_nowMs >= _chaseCooldownUntilMs)
+        {
+            var dx = CursorX - X;
+            var dy = CursorY - Y;
+            var dist = Math.Sqrt(dx * dx + dy * dy);
+            if (dist < 220 && dist > 24)
+            {
+                _chaseDetectTimer += deltaMs;
+                if (_chaseDetectTimer >= 500)
+                {
+                    _chaseDetectTimer = 0;
+                    GoTo(CursorX);
+                    return;
+                }
+            }
+            else
+            {
+                _chaseDetectTimer = 0;
+            }
+        }
+        else
+        {
+            _chaseDetectTimer = 0;
+        }
 
         if (_inactivityTimer >= _sleepTimeoutMs)
         {
@@ -76,10 +122,9 @@ public class PetBehavior
                 if (Animator != null) { Animator.Loop = false; Animator.Play(0, null); }
                 return;
             }
-            if (_random.Next(4) == 0)
+            if (ChaseTargetX.HasValue)
             {
-                StateMachine.TransitionTo(PetState.Jump);
-                if (Animator != null) { Animator.Loop = false; Animator.Play(0, null); }
+                GoTo(ChaseTargetX.Value);
                 return;
             }
             if (Docked) return;
@@ -94,6 +139,21 @@ public class PetBehavior
 
     private void UpdateWalk(int deltaMs, double screenWidth, double screenHeight, int petSize)
     {
+        // Stop if at chase target
+        if (ChaseTargetX.HasValue)
+        {
+            var catEdge = SpeedX > 0 ? X + 96 : X;
+            if (Math.Abs(catEdge - ChaseTargetX.Value) < 12)
+            {
+                SpeedX = 0;
+                ChaseTargetX = null;
+                _chaseCooldownUntilMs = _nowMs + 1500;
+                StateMachine.TransitionTo(PetState.Idle);
+                Animator?.Play(0);
+                return;
+            }
+        }
+
         X += SpeedX;
         Y += SpeedY;
 
@@ -145,10 +205,6 @@ public class PetBehavior
             }
             StateMachine.TransitionTo(next);
         }
-    }
-
-    private void UpdateSleep(int deltaMs)
-    {
     }
 
     public void OnClick()

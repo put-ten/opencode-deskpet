@@ -31,6 +31,13 @@
            Width="96" Height="96"
            HorizontalAlignment="Left"
            VerticalAlignment="Top"
-            Margin="0,64,0,0" />
+            Margin="0,64,0,0"
+            MouseEnter="OnPetMouseEnter"
+            MouseLeave="OnPetMouseLeave" />
+    <Canvas Name="ParticleCanvas"
+            IsHitTestVisible="False"
+            Width="96" Height="160"
+            HorizontalAlignment="Left"
+            VerticalAlignment="Top" />
   </Grid>
 </Window>

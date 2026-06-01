@@ -4,13 +4,11 @@ public enum PetState
 {
     Idle,
     Walk,
-    Jump,
     Stretch,
     Sleep,
     Interact,
     Drag,
     Bounce,
-    Chat
 }
 
 public class StateMachine
